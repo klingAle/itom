@@ -11,7 +11,7 @@ The tinyomo ("tiny pyomo") module uses much less memory compared to Pyomo, which
 __all__ = ('Sets', 'Set', 'Params', 'Param', 'Vars', 'Var', 'Constraints', 'Constraint', 'Objective', 'NonNegativeReals', 'Reals')
 
 #from __future__ import division
-import os, math
+import os, math, bisect
 from time import time
 import pandas as pd
 import numpy as np
@@ -20,6 +20,19 @@ from functools import reduce
 ###############################################################################
 
 # Private functions doing the heavy lifting
+
+def _relevant_positions(sorted_relevant, index_start, index_end):
+	'''
+	Same as relevant_vars.intersection(range(index_start, index_end+1)), where sorted_relevant is
+	sorted(relevant_vars), but without running over the whole range of positions (billions for large
+	models, of which only a few million are relevant).
+	The set is filled in ascending order, as intersection() does, so iterating over it gives the same
+	order, which is the order of the lines in bounds.txt and variables.txt.
+	'''
+	lo = bisect.bisect_left(sorted_relevant, index_start)
+	hi = bisect.bisect_right(sorted_relevant, index_end)
+	return set(sorted_relevant[lo:hi])
+
 
 def _param_index_columns(set_structure, exchange=False):
 	'''
@@ -1143,12 +1156,12 @@ def write_bounds(VarsGroup):
 	bounds_file = open(bounds_filename,"w")
 	bounds_file.write("c_e_ONE_VAR_CONSTANT: \nONE_VAR_CONSTANT = 1.0\n\nbounds\n")
 
+	sorted_relevant = sorted(VarsGroup.relevant_vars)
 	for v in VarsGroup.all_vars:
 		lower = v.lower
 		upper = v.upper
-		positions = range(v.positions['index_start'], v.positions['index_end']+1)
 		# Write bounds only for variables that are actually used in constraints (i.e. relevant variables)
-		relevant_positions = VarsGroup.relevant_vars.intersection(positions)
+		relevant_positions = _relevant_positions(sorted_relevant, v.positions['index_start'], v.positions['index_end'])
 #        for position in range(v.positions['index_start'], v.positions['index_end']+1):
 		for position in relevant_positions:
 			bounds_file.write("   {} <= x{} <= {}\n".format(lower, position, upper))
@@ -1285,6 +1298,7 @@ def write_variables(VarsGroup):
 	vars_file = open(vars_filename,"w")
 	vars_file.write("x_index,x,var_name,var_index,var_lp\n")
 
+	sorted_relevant = sorted(VarsGroup.relevant_vars)
 	for v in VarsGroup.all_vars:
 		# TODO here is an Exception needed for the Variable ModelPeriodCost that has no Sets and the _prepare_df_structure_ crashes
 
@@ -1292,9 +1306,8 @@ def write_variables(VarsGroup):
 		nb_sets = len(len_sets)
 		cum_len_sets = [math.prod(len_sets[i:]) for i in range(0,len(len_sets))]
 
-		positions = range(v.positions['index_start'], v.positions['index_end']+1)
 		# Write only variables that are actually used in constraints (i.e. relevant variables)
-		relevant_positions = VarsGroup.relevant_vars.intersection(positions)
+		relevant_positions = _relevant_positions(sorted_relevant, v.positions['index_start'], v.positions['index_end'])
 		for position in relevant_positions:
 			index_label = position - v.positions['index_start']
 			# set_index of the form [0,0,0,0] then [0,0,0,1] etc.
