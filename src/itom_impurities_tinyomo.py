@@ -53,7 +53,8 @@ class itom_hub_retrofit_impurities_tinyomo(itom_hub_retrofit_tinyomo):
 		self.IP1_ImpuritiesInProductsLimit = Constraint(self.LOCATION, self.TECHNOLOGY, self.PRODUCT, self.YEAR,
 														rule=self.IP1_ImpuritiesInProductsLimit_rule,
 														ConsName='IP1_ImpuritiesInProductsLimit',
-														ConsGroup=self.AllCons)
+														ConsGroup=self.AllCons,
+														sparse=self._sparse_impurities if self.sparse_enumeration else None)
 
 	###########
 	# METHODS #
@@ -64,6 +65,24 @@ class itom_hub_retrofit_impurities_tinyomo(itom_hub_retrofit_tinyomo):
 	###############
 
 	#########       	Impurities in products	     	#############
+
+	def _sparse_impurities(self):
+		'''
+		Index tuples of IP1 (location, technology, product, year), see the note on sparse enumeration in
+		itom_hub_tinyomo. The rule returns a constraint only for a product i that the technology produces and
+		for which MaxImpurity(p, i) is not the default for some product p. Location and year do not matter.
+		If MaxImpurity has no data at all, the block is empty.
+		'''
+		technologies, products = self._set_values(self.TECHNOLOGY), self._set_values(self.PRODUCT)
+		limited = [any(self.MaxImpurity.get_value(p, i) != self.HighMaxDefault for p in products) for i in products]
+		products_of_technology = [[ii for ii, i in enumerate(products)
+								   if limited[ii] and self.ProductFromTechnology.get_value(t, i) == 1]
+								  for t in technologies]
+		for il in range(self.LOCATION.len):
+			for it in range(len(technologies)):
+				for ii in products_of_technology[it]:
+					for iy in range(self.YEAR.len):
+						yield (il, it, ii, iy)
 
 	def IP1_ImpuritiesInProductsLimit_rule(self, l, t, i, y):
 		"""

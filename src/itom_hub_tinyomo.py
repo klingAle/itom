@@ -47,6 +47,11 @@ class itom_hub_tinyomo(object):
 		# Dictionary of configuration items
 		self.config = config
 
+		# If True, the constraint blocks that are almost empty (PB1, PB2, PB5, PB6, TF1a, ...) only call their rule
+		# for the positions that can be non-empty, instead of for all positions of the index space (see the
+		# sparse arguments of the constraints and tinyomo.Constraint). The LP file is identical either way.
+		self.sparse_enumeration = bool(((config or {}).get('framework') or {}).get('sparse_enumeration', True))
+
 		# High default max value for inequality constraints
 		# The point is to actually skip such constraints (bounds are enough)
 		# to reduce the size of the LP problem.
@@ -398,11 +403,15 @@ class itom_hub_tinyomo(object):
 		#########	        Product Balance    	 	#############
 		self.PB1_Production_1 = Constraint(self.LOCATION, self.PRODUCT, self.TECHNOLOGY, self.MODE_OF_OPERATION,
 										   self.YEAR, rule=self.PB1_Production_1_rule, ConsName="PB1_Production_1",
-										   ConsGroup=self.AllCons)
+										   ConsGroup=self.AllCons,
+										   sparse=self._sparse_product_balance(self.ProductFromTechnology, True)
+										   if self.sparse_enumeration else None)
 
 		self.PB2_Production_2 = Constraint(self.LOCATION, self.PRODUCT, self.TECHNOLOGY, self.YEAR,
 										   rule=self.PB2_Production_2_rule, ConsName="PB2_Production_2",
-										   ConsGroup=self.AllCons)
+										   ConsGroup=self.AllCons,
+										   sparse=self._sparse_product_balance(self.ProductFromTechnology, False)
+										   if self.sparse_enumeration else None)
 
 		self.PB3_Production_3 = Constraint(self.LOCATION, self.PRODUCT, self.YEAR, rule=self.PB3_Production_3_rule,
 										   ConsName="PB3_Production_3", ConsGroup=self.AllCons)
@@ -415,10 +424,14 @@ class itom_hub_tinyomo(object):
 		#                                   ConsGroup=self.AllCons)
 
 		self.PB5_Use_1 = Constraint(self.LOCATION, self.PRODUCT, self.TECHNOLOGY, self.MODE_OF_OPERATION, self.YEAR,
-									rule=self.PB5_Use_1_rule, ConsName="PB5_Use_1", ConsGroup=self.AllCons)
+									rule=self.PB5_Use_1_rule, ConsName="PB5_Use_1", ConsGroup=self.AllCons,
+									sparse=self._sparse_product_balance(self.ProductToTechnology, True)
+									if self.sparse_enumeration else None)
 
 		self.PB6_Use_2 = Constraint(self.LOCATION, self.PRODUCT, self.TECHNOLOGY, self.YEAR, rule=self.PB6_Use_2_rule,
-									ConsName="PB6_Use_2", ConsGroup=self.AllCons)
+									ConsName="PB6_Use_2", ConsGroup=self.AllCons,
+									sparse=self._sparse_product_balance(self.ProductToTechnology, False)
+									if self.sparse_enumeration else None)
 
 		self.PB7_Use_3 = Constraint(self.LOCATION, self.PRODUCT, self.YEAR, rule=self.PB7_Use_3_rule,
 									ConsName="PB7_Use_3", ConsGroup=self.AllCons)
@@ -432,7 +445,8 @@ class itom_hub_tinyomo(object):
 		#########        	Transport Flows	 	#############
 		self.TF1a_Transport_1a = Constraint(self.LOCATION, self.LOCATION, self.PRODUCT, self.TRANSPORTMODE, self.YEAR,
 											rule=self.TF1a_Transport_1a_rule, ConsName="TF1a_Transport_1a",
-											ConsGroup=self.AllCons, exchange=True)
+											ConsGroup=self.AllCons, exchange=True,
+											sparse=self._sparse_transport_1a if self.sparse_enumeration else None)
 
 		self.TF1b_Transport_1b = Constraint(self.LOCATION, self.LOCATION, self.TRANSPORTMODE, self.YEAR,
 											rule=self.TF1b_Transport_1b_rule, ConsName="TF1b_Transport_1b",
@@ -667,6 +681,72 @@ class itom_hub_tinyomo(object):
 	#################
 
 	#	write_parameters(self.TechnologyToFromStorage, output_path=self.OutputPath)
+
+	#############################################
+	# Sparse enumeration of constraint positions #
+	#############################################
+	# For some constraint blocks the rule returns None for 99% or more of the positions of the index space.
+	# The methods below list, in ascending order, the index tuples (position of the value in each set of the
+	# constraint) that can be non-empty. They apply the same tests as the rules, with the same Param.get_value()
+	# calls, but on small tables instead of on every position. The rules are still called and decide; a tuple
+	# listed here that the rule rejects costs time only, a tuple missing here would drop a constraint.
+	# Any change to the None conditions of the rules below must be made here too. The golden files
+	# (src/golden_files.py) check that the LP file stays byte-identical.
+
+	@staticmethod
+	def _set_values(a_set):
+		return [a_set.datadict[k]['VALUE'] for k in range(a_set.len)]
+
+	def _sparse_product_balance(self, product_param, with_modes):
+		'''
+		Index tuples of PB1 (with_modes=True, product_param=ProductFromTechnology), PB5 (True, ProductToTechnology),
+		PB2 (False, ProductFromTechnology) and PB6 (False, ProductToTechnology). Their rules return a constraint only if
+		location and technology are both hub or both not hub, the technology has the product (and the mode, for
+		PB1 and PB5). The year does not matter.
+
+		Returns a function listing (location, product, technology, mode, year) or (location, product, technology, year).
+		'''
+		def index_tuples():
+			locations, products = self._set_values(self.LOCATION), self._set_values(self.PRODUCT)
+			technologies, modes = self._set_values(self.TECHNOLOGY), self._set_values(self.MODE_OF_OPERATION)
+			years = range(self.YEAR.len)
+
+			hub_match = [[(self.HubLocation.get_value(l) == 1 and self.HubTechnology.get_value(t) == 1) or
+						  (self.HubLocation.get_value(l) == 0 and self.HubTechnology.get_value(t) == 0)
+						  for t in technologies] for l in locations]
+			technologies_of_product = [[it for it, t in enumerate(technologies) if product_param.get_value(t, p) == 1]
+										for p in products]
+			modes_of_technology = [[im for im, m in enumerate(modes) if self.ModeForTechnology.get_value(t, m) == 1]
+									for t in technologies]
+
+			for il in range(len(locations)):
+				match = hub_match[il]
+				for ip in range(len(products)):
+					for it in technologies_of_product[ip]:
+						if not match[it]:
+							continue
+						if with_modes:
+							for im in modes_of_technology[it]:
+								for iy in years:
+									yield (il, ip, it, im, iy)
+						else:
+							for iy in years:
+								yield (il, ip, it, iy)
+		return index_tuples
+
+	def _sparse_transport_1a(self):
+		'''
+		Index tuples of TF1a (location 1, location 2, product, transport mode, year). Every branch of its rule that
+		returns a constraint needs TransportRoute(l, ll, p, tr, y) == 1 and a transport mode that is not multi-purpose.
+		TransportRoute.data only holds the rows of the input file, all other values are the default 0.
+		'''
+		constraint_sets = self.TF1a_Transport_1a.sets
+		index_in_set = [s.pos for s in constraint_sets]
+		tuples = [tuple([int(index_in_set[d][key[d]]) for d in range(len(key))])
+				  for key, row in self.TransportRoute.data.items()
+				  if row['VALUE'] == 1 and self.MultiPurposeTransport.get_value(key[3]) == 0]
+		tuples.sort()
+		return tuples
 
 	def build_lp(self):
 		'''

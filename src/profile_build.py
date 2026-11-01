@@ -275,8 +275,8 @@ def main():
                      'written': counter.calls - counter.none, 'terms': counter.terms,
                      'seconds_total': dt, 'seconds_in_rule': counter.rule_seconds,
                      'seconds_generator_format_io': dt - counter.rule_seconds})
-        print('  [%2d/%d] %-60s %8.1f s  (%d pos, %.0f%% skipped)'
-              % (i + 1, len(cons), c.name, dt, n, 100.0 * counter.none / max(counter.calls, 1)))
+        print('  [%2d/%d] %-60s %8.1f s  (%d pos, %d rule calls, %.0f%% of them None)'
+              % (i + 1, len(cons), c.name, dt, n, counter.calls, 100.0 * counter.none / max(counter.calls, 1)))
     m.AllCons.output_path = real_output_path
     shutil.rmtree(os.path.join(out_path, '_block'), ignore_errors=True)
     phases['2_constraints'] = time.perf_counter() - cons_total0 - cons_merge_seconds

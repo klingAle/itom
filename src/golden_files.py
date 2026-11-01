@@ -6,6 +6,7 @@ Golden files for the tinyomo LP build: proves that a change to the build code do
 Usage (from the repo root or from src/):
     python3 src/golden_files.py create -s SCENARIO     # build with the current code, store the fingerprint
     python3 src/golden_files.py check  -s SCENARIO     # build again, compare with the stored fingerprint
+    (add --no-sparse to build with framework.sparse_enumeration=False, the old dense path)
 
 create: runs the real build path (model.build_lp(), exactly as run.py does) into
 output/SCENARIO/_golden_build/ and stores in golden/SCENARIO.json
@@ -118,9 +119,14 @@ def main():
     parser.add_argument('-s', '--scenario', required=True)
     parser.add_argument('--keep', action='store_true',
                         help='keep the build files in output/SCENARIO/_golden_build (default: delete)')
+    parser.add_argument('--no-sparse', action='store_true',
+                        help='build with framework.sparse_enumeration=False (the old, dense path), '
+                             'to check that this path still gives the golden files too')
     args = parser.parse_args()
 
     config = load_config(args.scenario)
+    if args.no_sparse:
+        config['framework']['sparse_enumeration'] = False
     scenario = config['model_run_code']
     input_path = os.path.join(REPO_PATH, 'input', scenario)
     if not os.path.exists(os.path.join(input_path, 'YEAR.csv')):

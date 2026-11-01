@@ -13,6 +13,7 @@ framework:
     # If both tinyomo and like_pyomo are True, both types of .lp files are built but the model is only solve with the like_pyomo file
     tinyomo: True # If False, the model uses PYOMO to build the model, if True it uses tinyomo to build the .lp and .mps files.
     like_pyomo: False # If True builds the .lp and .mps files like pyomo (human readable, for debugging) and solves the problem with these files.
+    sparse_enumeration: True # If True, constraint blocks that are almost empty (PB1, PB2, PB5, PB6, TF1a, IP1) only evaluate the positions that can be non-empty. The LP file is identical, building is much faster. Set False for the old behaviour (debugging).
     keep_MPS: True # If True the model .mps file is not deleted from the output folder after the model run.
     keep_LP: False # If True the model .lp file is not deleted from the output folder after the model run.
     keep_files: False # If True the intermediary files (objective.txt, constraints.txt, bounds.txt) are not deleted from the output folder after the model run.

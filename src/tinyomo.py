@@ -21,6 +21,91 @@ from functools import reduce
 
 # Private functions doing the heavy lifting
 
+def _param_index_columns(set_structure, exchange=False):
+	'''
+	Names of the index columns of a parameter and the set dataframes belonging to them.
+	Columns that would have the same name (exchange, interregional, retrofit and impurity
+	parameters) are renamed, e.g. LOCATION, LOCATION -> LOCATION_1, LOCATION_2.
+
+	Returns
+	-------
+	param_set_index :   list
+						Names of the index columns, in the order of the parameter's sets.
+	sets :              dict
+						Maps each of these names to the dataframe of the corresponding Set.
+	'''
+	param_set_index = [s.name for s in set_structure]
+	sets = {s.name:s.data for s in set_structure}
+
+	# For some Exchange parameters, two columns have the same name. They need
+	# to be renamed to avoid problems.
+	if exchange and (param_set_index[0]!='LOCATION_1' or param_set_index[1]!='LOCATION_2'):
+		regions_to_from = ['LOCATION_1', 'LOCATION_2']
+		regions_to_from.extend(param_set_index[2:])
+		param_set_index = regions_to_from
+		sets['LOCATION_1'] = sets['LOCATION']
+		sets['LOCATION_2'] = sets['LOCATION']
+
+	# For multiregional modelling, interregional cost parameters have two columns with the same name.
+	if len(param_set_index)>=2 and (param_set_index[0]=='REGION') and (param_set_index[1]=='REGION'):
+		regions_to_from = ['REGION_1', 'REGION_2']
+		regions_to_from.extend(param_set_index[2:])
+		param_set_index = regions_to_from
+		sets['REGION_1'] = sets['REGION']
+		sets['REGION_2'] = sets['REGION']
+
+	# For some Retrofit parameters, two columns have the same name. They need
+	# to be renamed to avoid problems.
+	if len(param_set_index)>=2 and (param_set_index[0]=='TECHNOLOGY') and (param_set_index[1]=='TECHNOLOGY'):
+		tech_current_retrofit = ['TECHNOLOGY_1', 'TECHNOLOGY_2']
+		param_set_index = tech_current_retrofit
+		sets['TECHNOLOGY_1'] = sets['TECHNOLOGY']
+		sets['TECHNOLOGY_2'] = sets['TECHNOLOGY']
+
+	# For some Impurity parameters, two columns have the same name. They need
+	# to be renamed to avoid problems.
+	if len(param_set_index)>=2 and (param_set_index[0]=='PRODUCT') and (param_set_index[1]=='PRODUCT'):
+		tech_current_retrofit = ['PRODUCT_1', 'PRODUCT_2']
+		param_set_index = tech_current_retrofit
+		sets['PRODUCT_1'] = sets['PRODUCT']
+		sets['PRODUCT_2'] = sets['PRODUCT']
+
+	return param_set_index, sets
+
+
+def _rows_in_sets(data, columns, sets):
+	'''
+	Gives the same rows as structure.merge(data, how='left').dropna() for the dataframe
+	structure of _prepare_df_structure(), without building that structure. The structure
+	holds every combination of the set values (hundreds of millions of rows for large models,
+	almost all of which are dropped again), the rows of the input data are few.
+
+	Returns the rows of data whose values in all index columns are in the corresponding sets, with
+	_ the columns in the order of the merge result (index columns first, then the other columns),
+	_ the rows in the order of the structure (sets nested in the order of the columns); rows
+	  with the same index keep their order in data,
+	_ the other columns as float if the structure has a combination that data does not cover,
+	  because the left merge fills those with NaN.
+	'''
+	positions = []
+	n_combinations = 1
+	for c in columns:
+		values = pd.Series(sets[c]['VALUE'].values)
+		values = values.drop_duplicates() # a duplicated set value gives duplicated structure rows only
+		n_combinations *= len(values)
+		positions.append(data[c].map(pd.Series(np.arange(len(values)), index=values.values)))
+	in_sets = np.logical_and.reduce([p.notna().values for p in positions])
+	data = data.loc[in_sets]
+	order = np.lexsort([p.values[in_sets] for p in positions[::-1]]) # last key = most significant
+	data = data.iloc[order]
+	data = data[columns + [c for c in data.columns if c not in columns]]
+	if len(data.drop_duplicates(subset=columns)) < n_combinations:
+		for c in data.columns[len(columns):]:
+			if pd.api.types.is_integer_dtype(data[c]) or pd.api.types.is_bool_dtype(data[c]):
+				data[c] = data[c].astype('float64')
+	return data
+
+
 def _prepare_df_structure(set_structure, exchange=False):
 	'''
 	Take in a list of set names and a dictionary of set dataframes to build a
@@ -57,41 +142,7 @@ def _prepare_df_structure(set_structure, exchange=False):
 #                        The values are the sets' dataframes generated in the
 #                        get_SET() functions.
 
-	param_set_index = [s.name for s in set_structure]
-	sets = {s.name:s.data for s in set_structure}
-
-	# For some Exchange parameters, two columns have the same name. They need
-	# to be renamed to avoid problems.
-	if exchange and (param_set_index[0]!='LOCATION_1' or param_set_index[1]!='LOCATION_2'):
-		regions_to_from = ['LOCATION_1', 'LOCATION_2']
-		regions_to_from.extend(param_set_index[2:])
-		param_set_index = regions_to_from
-		sets['LOCATION_1'] = sets['LOCATION']
-		sets['LOCATION_2'] = sets['LOCATION']
-
-	# For multiregional modelling, interregional cost parameters have two columns with the same name.
-	if len(param_set_index)>=2 and (param_set_index[0]=='REGION') and (param_set_index[1]=='REGION'):
-		regions_to_from = ['REGION_1', 'REGION_2']
-		regions_to_from.extend(param_set_index[2:])
-		param_set_index = regions_to_from
-		sets['REGION_1'] = sets['REGION']
-		sets['REGION_2'] = sets['REGION']
-
-	# For some Retrofit parameters, two columns have the same name. They need
-	# to be renamed to avoid problems.
-	if len(param_set_index)>=2 and (param_set_index[0]=='TECHNOLOGY') and (param_set_index[1]=='TECHNOLOGY'):
-		tech_current_retrofit = ['TECHNOLOGY_1', 'TECHNOLOGY_2']
-		param_set_index = tech_current_retrofit
-		sets['TECHNOLOGY_1'] = sets['TECHNOLOGY']
-		sets['TECHNOLOGY_2'] = sets['TECHNOLOGY']
-
-	# For some Impurity parameters, two columns have the same name. They need
-	# to be renamed to avoid problems.
-	if len(param_set_index)>=2 and (param_set_index[0]=='PRODUCT') and (param_set_index[1]=='PRODUCT'):
-		tech_current_retrofit = ['PRODUCT_1', 'PRODUCT_2']
-		param_set_index = tech_current_retrofit
-		sets['PRODUCT_1'] = sets['PRODUCT']
-		sets['PRODUCT_2'] = sets['PRODUCT']
+	param_set_index, sets = _param_index_columns(set_structure, exchange=exchange)
 
 	# Empty parameter df with necessary columns (except 'VALUE')
 	df_param = pd.DataFrame(columns=param_set_index)
@@ -337,11 +388,12 @@ class Param(object):
 		self.set_len = {s.name:len(s.data) for s in self.sets}
 
 		# Try to build a Param's dataframe
-		## 1) Build the dataframe structure indexed by the Sets passed as *arg
-		## 2) Merge the input data into that structure
+		## 1) Select the rows of the input data whose index values are all in the Sets passed as *arg
+		##    (same as merging the input data into the dataframe structure of all index combinations)
+		## 2) Order them like that structure
 		## 3) Drop the NaNs (while keeping the index), the NaNs will be replaced with default values at get_value()
 		## old: 3) Fill the NaNs with the default value for the parameter
-		df_structure = _prepare_df_structure(arg, exchange=exchange)
+		index_columns, index_sets = _param_index_columns(arg, exchange=exchange)
 		try:
 			self.data = pd.read_csv(os.path.join(InputPath, ParamName + '.csv'))
 			self.data.drop_duplicates(inplace=True) # Make sure the csv input file does not introduce duplicates
@@ -354,7 +406,10 @@ class Param(object):
 			if self.data.columns[1]=='PRODUCT.1': # if retrofit Param, the first two columns are PRODUCT and PRODUCT.1 after read_csv
 				self.data.rename(columns={self.data.columns[0]:'PRODUCT_1', self.data.columns[1]:'PRODUCT_2'}, inplace=True)
 
-			self.data = df_structure.merge(self.data, how='left')
+			if all(c in self.data.columns for c in index_columns):
+				self.data = _rows_in_sets(self.data, index_columns, index_sets)
+			else:
+				self.data = _prepare_df_structure(arg, exchange=exchange).merge(self.data, how='left')
 			#self.data.fillna(default, inplace=True)
 			self.data.dropna(inplace=True)
 			# Make sure that the last column (with the data) is 'VALUE'
@@ -691,6 +746,15 @@ class Constraint(object):
 			Instance of the Constraints class.
 		ConsName: string
 			Name of the Constraint.
+		sparse [optional]: function
+			Takes no argument and returns an iterable of index tuples (the position of
+			the value in each of the constraint's sets), in ascending order, that is a
+			SUPERSET of the positions for which the rule does not return None. If given,
+			write_constraints() only calls the rule for these positions instead of for
+			all positions of the index space. The rule remains the final judge, so a
+			too generous superset only costs time, but a position missing from it
+			would silently drop a constraint. The order must be the order of the
+			positions (lexicographic in the tuple), which the constraint names depend on.
 
 	Public class attributes:
 		type: string
@@ -710,8 +774,11 @@ class Constraint(object):
 		get_set_index(self)
 			This is a generator function that yields (one by one as a generator)
 			in order the lists of sets indexing the constraint.
+		get_sparse_set_index(self)
+			Same as get_set_index() but only for the positions given by the sparse
+			function. Yields (position, list of set values).
 	'''
-	def __init__(self, *arg, rule=None, ConsName='', ConsGroup=None, exchange=False):
+	def __init__(self, *arg, rule=None, ConsName='', ConsGroup=None, exchange=False, sparse=None):
 
 		# Verify that we got all we need to define a Constraint.
 		try:
@@ -731,6 +798,7 @@ class Constraint(object):
 			self.sets[0] = ConsGroup.sets_group.all_sets['LOCATION_1']
 			self.sets[1] = ConsGroup.sets_group.all_sets['LOCATION_2']
 		self.rule = rule
+		self.sparse = sparse
 		# Calculate the following data once in __init__ and then use it multiple
 		# times in get_set_index()
 		# product(length of sets listed AFTER this set in param_set_index)
@@ -765,6 +833,28 @@ class Constraint(object):
 			ConsGroup.all_cons.append(self)
 
 	# Methods
+	def get_sparse_set_index(self):
+		'''
+		This is a generator function that yields (position, list of set values) for
+		the index tuples given by the sparse function of the constraint, in the same
+		form and with the same position as the dense get_set_index() would.
+		The index tuples must come in ascending order.
+		'''
+		# position = index_start + sum(index_in_set_i * product(length of the sets after set i))
+		multipliers = self.stacked_index + [1]
+		index_start = self.positions['index_start']
+		index_end = self.positions['index_end']
+		set_values = [[s.datadict[k]['VALUE'] for k in range(s.len)] for s in self.sets]
+		nb_sets = len(self.sets)
+		last_position = index_start - 1
+		for idx in self.sparse():
+			position = index_start + sum([idx[i] * multipliers[i] for i in range(nb_sets)])
+			if not last_position < position <= index_end:
+				raise ValueError('Sparse positions of constraint {} are not ascending or out of range '
+								 '(index tuple {}, position {}, previous {}).'.format(self.name, idx, position, last_position))
+			last_position = position
+			yield position, [set_values[i][idx[i]] for i in range(nb_sets)]
+
 	def get_set_index(self):
 		'''
 		This is a generator function that yields (one by one as a generator)
@@ -972,11 +1062,13 @@ def write_constraints(ConsGroup, VarsGroup, SingleCons=None, shadow=False):
 
 		tc0 = time()
 #        set_index_gen = (c.get_set_index(p) for p in range(c.positions['index_start'], c.positions['index_end']+1))
-		set_index_gen = c.get_set_index()
-		for position in range(c.positions['index_start'], c.positions['index_end']+1):
-
-			# Get the list of set values making the index of the constraint at that position.
-			set_index = next(set_index_gen)
+		if c.sparse is None:
+			# All positions of the index space, with the list of set values making the index of the constraint at that position.
+			positions_gen = zip(range(c.positions['index_start'], c.positions['index_end']+1), c.get_set_index())
+		else:
+			# Only the positions for which the rule can return something (see Constraint)
+			positions_gen = c.get_sparse_set_index()
+		for position, set_index in positions_gen:
 
 			# rule
 			cons_data = c.rule(*set_index)
