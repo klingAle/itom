@@ -1,5 +1,6 @@
 # glpk # GNU Linear Programming Kit (solver)
 gurobipy==12.0.1 # Interface to gurobi solver
+highspy==1.15.1 # Interface to HiGHS solver (open source, no licence needed)
 matplotlib # Vizualisation library
 numpy # Array processing for numbers, strings, records, and objects
 pandas<3 # High-performance, easy-to-use data structures and data analysis tools
