@@ -455,7 +455,8 @@ class itom_hub_tinyomo(object):
 
 		self.TF1b_Transport_1b = Constraint(self.LOCATION, self.LOCATION, self.TRANSPORTMODE, self.YEAR,
 											rule=self.TF1b_Transport_1b_rule, ConsName="TF1b_Transport_1b",
-											ConsGroup=self.AllCons, exchange=True)
+											ConsGroup=self.AllCons, exchange=True,
+											sparse=self._sparse_transport_1b if self.sparse_enumeration else None)
 		self.TF2_Transport_2 = Constraint(self.LOCATION, self.PRODUCT, self.YEAR, rule=self.TF2_Transport_2_rule,
 										  ConsName="TF2_Transport_2", ConsGroup=self.AllCons)
 
@@ -628,7 +629,8 @@ class itom_hub_tinyomo(object):
 														   self.MODE_OF_OPERATION, self.YEAR,
 														   rule=self.E1_LocalEmissionProductionByMode_rule,
 														   ConsName="E1_LocalEmissionProductionByMode",
-														   ConsGroup=self.AllCons)
+														   ConsGroup=self.AllCons,
+														   sparse=self._sparse_emissions_by_mode if self.sparse_enumeration else None)
 
 		self.E2_LocalEmissionProduction = Constraint(self.LOCATION, self.TECHNOLOGY, self.EMISSION, self.YEAR,
 													 rule=self.E2_LocalEmissionProduction_rule,
@@ -794,6 +796,45 @@ class itom_hub_tinyomo(object):
 			inside = [loc for loc in self.LOCATION.data.VALUE if self.Geography.get_value(r, loc) == 1]
 			cache[r] = (outside, inside, set(outside), set(inside))
 		return cache[r]
+
+	def _sparse_transport_1b(self):
+		'''
+		Index tuples of TF1b (location 1, location 2, transport mode, year). Its rule returns a constraint only for a
+		multi-purpose transport mode with at least one product with TransportRoute(l, ll, p, tr, y) == 1.
+		TransportRoute.data only holds the rows of the input file, all other values are the default 0.
+		'''
+		constraint_sets = self.TF1b_Transport_1b.sets
+		index_in_set = [s.pos for s in constraint_sets]
+		tuples = {(int(index_in_set[0][key[0]]), int(index_in_set[1][key[1]]),
+				   int(index_in_set[2][key[3]]), int(index_in_set[3][key[4]]))
+				  for key, row in self.TransportRoute.data.items()
+				  if row['VALUE'] == 1 and self.MultiPurposeTransport.get_value(key[3]) == 1}
+		return sorted(tuples)
+
+	def _sparse_emissions_by_mode(self):
+		'''
+		Index tuples of E1 (location, technology, emission, mode of operation, year). Its rule returns a constraint
+		for every emission and year if location and technology are both hub or both not hub and the technology has
+		the mode. Generator, in ascending order.
+		'''
+		locations, technologies = self._set_values(self.LOCATION), self._set_values(self.TECHNOLOGY)
+		modes = self._set_values(self.MODE_OF_OPERATION)
+		emissions, years = range(self.EMISSION.len), range(self.YEAR.len)
+
+		modes_of_technology = [[im for im, m in enumerate(modes) if self.ModeForTechnology.get_value(t, m) == 1]
+							   for t in technologies]
+		for il, l in enumerate(locations):
+			hub_location = self.HubLocation.get_value(l)
+			for it, t in enumerate(technologies):
+				if not modes_of_technology[it]:
+					continue
+				if not ((hub_location == 1 and self.HubTechnology.get_value(t) == 1) or
+						(hub_location == 0 and self.HubTechnology.get_value(t) == 0)):
+					continue
+				for ie in emissions:
+					for im in modes_of_technology[it]:
+						for iy in years:
+							yield (il, it, ie, im, iy)
 
 	def build_lp(self):
 		'''
