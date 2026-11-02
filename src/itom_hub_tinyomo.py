@@ -753,6 +753,48 @@ class itom_hub_tinyomo(object):
 		tuples.sort()
 		return tuples
 
+	def _transport_routes(self):
+		'''
+		The routes with TransportRoute == 1, built once for the rules of TF2-TF5 and TC1. Without this table every
+		constraint position searches all locations and all transport modes for existing routes.
+		Returns two dicts of dicts:
+			(origin, product, year) -> {destination: [transport modes]}
+			(destination, product, year) -> {origin: [transport modes]}
+		Destinations/origins and transport modes are in the order of the sets LOCATION and TRANSPORTMODE, i.e. in
+		the order in which the loops of the rules visit them.
+		'''
+		routes = getattr(self, '_transport_routes_cache', None)
+		if routes is None:
+			loc_pos = self.LOCATION.pos
+			tr_pos = self.TRANSPORTMODE.pos
+			keys = [key for key, row in self.TransportRoute.data.items()
+					if row['VALUE'] == 1 and key[0] in loc_pos and key[1] in loc_pos and key[3] in tr_pos]
+			by_origin = {}
+			keys.sort(key=lambda k: (loc_pos[k[0]], loc_pos[k[1]], tr_pos[k[3]]))
+			for ll, l, p, tr, y in keys:
+				by_origin.setdefault((ll, p, y), {}).setdefault(l, []).append(tr)
+			by_destination = {}
+			keys.sort(key=lambda k: (loc_pos[k[1]], loc_pos[k[0]], tr_pos[k[3]]))
+			for ll, l, p, tr, y in keys:
+				by_destination.setdefault((l, p, y), {}).setdefault(ll, []).append(tr)
+			routes = (by_origin, by_destination)
+			self._transport_routes_cache = routes
+		return routes
+
+	def _region_locations(self, r):
+		'''
+		Locations outside (Geography == 0) and inside (Geography == 1) of region r, each as list in the order of the
+		set LOCATION and as set, cached per region: (outside list, inside list, outside set, inside set).
+		'''
+		cache = getattr(self, '_region_locations_cache', None)
+		if cache is None:
+			cache = self._region_locations_cache = {}
+		if r not in cache:
+			outside = [loc for loc in self.LOCATION.data.VALUE if self.Geography.get_value(r, loc) == 0]
+			inside = [loc for loc in self.LOCATION.data.VALUE if self.Geography.get_value(r, loc) == 1]
+			cache[r] = (outside, inside, set(outside), set(inside))
+		return cache[r]
+
 	def build_lp(self):
 		'''
 		Build the components of the LP problem and stitch them together in one LP file.
@@ -1265,23 +1307,17 @@ class itom_hub_tinyomo(object):
 				TransportRoute(l, ll, p, trm, y) == 1]) for ll in LOCATION) == LocalProduction(l, p, y)
 		"""
 
+		transport = [self.Transport.get_index_label(l, ll, p, tr, y)
+					 for ll, trs in self._transport_routes()[0].get((l, p, y), {}).items()
+					 for tr in trs]
+		lhs = [(1, transport),
+			   (-1, self.LocalProduction.get_index_label(l, p, y))]
+		rhs = 0
 		if self.HubLocation.get_value(l) == 0:
-			self.TransportRoute.get_value(l, 'DELTA_DEMAND', p, 'ONSITE', y)
-			lhs = [(1, [self.Transport.get_index_label(l, ll, p, tr, y) for ll in self.LOCATION.data.VALUE
-						for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE if
-								   self.TransportRoute.get_value(l, ll, p, trm, y) == 1]]),
-				   (-1, self.LocalProduction.get_index_label(l, p, y))]
-			rhs = 0
 			sense = '<='
-			return {'lhs': lhs, 'rhs': rhs, 'sense': sense}
 		else:
-			lhs = [(1, [self.Transport.get_index_label(l, ll, p, tr, y) for ll in self.LOCATION.data.VALUE
-						for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE if
-								   self.TransportRoute.get_value(l, ll, p, trm, y) == 1]]),
-				   (-1, self.LocalProduction.get_index_label(l, p, y))]
-			rhs = 0
 			sense = '=='
-			return {'lhs': lhs, 'rhs': rhs, 'sense': sense}
+		return {'lhs': lhs, 'rhs': rhs, 'sense': sense}
 
 	def TF3_Transport_3_rule(self, l, p, y):
 		"""
@@ -1296,9 +1332,8 @@ class itom_hub_tinyomo(object):
 		"""
 
 		lhs = [(1, [self.Transport.get_index_label(ll, l, p, tr, y)
-					for ll in self.LOCATION.data.VALUE
-					for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-							   if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]]),
+					for ll, trs in self._transport_routes()[1].get((l, p, y), {}).items()
+					for tr in trs]),
 			   (-1, self.LocalUse.get_index_label(l, p, y))]
 		rhs = 0
 		sense = '=='
@@ -1316,15 +1351,15 @@ class itom_hub_tinyomo(object):
 													 LOCATION) * Geography(r, l) for l in LOCATION)
 		"""
 
+		outside, inside, outside_set, inside_set = self._region_locations(r)
+		by_origin = self._transport_routes()[0]
 		lhs = [(1, self.Import.get_index_label(r, p, y)),
 
 			   (-1,
 				[self.Transport.get_index_label(ll, l, p, tr, y)
-				 for ll in [loc for loc in self.LOCATION.data.VALUE if self.Geography.get_value(r, loc) == 0]
-				 for l in [loc for loc in self.LOCATION.data.VALUE if self.Geography.get_value(r, loc) == 1]
-				 for tr in
-				 [trm for trm in self.TRANSPORTMODE.data.VALUE if
-				  self.TransportRoute.get_value(ll, l, p, trm, y) == 1]])]
+				 for ll in outside
+				 for l, trs in by_origin.get((ll, p, y), {}).items() if l in inside_set
+				 for tr in trs])]
 
 		rhs = 0
 		sense = '=='
@@ -1342,15 +1377,15 @@ class itom_hub_tinyomo(object):
 				TransportRoute(l, ll, p, trm, y) == 1]) for ll in LOCATION) * Geography(r, l) for l in LOCATION)
 		"""
 
+		outside, inside, outside_set, inside_set = self._region_locations(r)
+		by_origin = self._transport_routes()[0]
 		lhs = [(1, self.Export.get_index_label(r, p, y)),
 
 			   (-1,
 				[self.Transport.get_index_label(l, ll, p, tr, y)
-				 for l in [loc for loc in self.LOCATION.data.VALUE if self.Geography.get_value(r, loc) == 1]
-				 for ll in [loc for loc in self.LOCATION.data.VALUE if self.Geography.get_value(r, loc) == 0]
-				 for tr in
-				 [trm for trm in self.TRANSPORTMODE.data.VALUE if
-				  self.TransportRoute.get_value(l, ll, p, trm, y) == 1]])]
+				 for l in inside
+				 for ll, trs in by_origin.get((l, p, y), {}).items() if ll in outside_set
+				 for tr in trs])]
 		rhs = 0
 		sense = '=='
 		return {'lhs': lhs, 'rhs': rhs, 'sense': sense}
@@ -1657,76 +1692,58 @@ class itom_hub_tinyomo(object):
 					for ll in LOCATION if HubLocation[ll]==1))
 		"""
 
-		if self.HubLocation.get_value(l)==0:
-			lhs = [(1, self.LocalTransportCost.get_index_label(l, p, y)),
+		if self.config['tr_interreg_costs'] not in ('not_product_specific', 'product_specific'):
+			raise ValueError("Unknown value of tr_interreg_costs: " + str(self.config['tr_interreg_costs']))
 
-				([-1 * sum(self.TransportCostByMode.get_value(r, tr, y)
-							* self.Geography.get_value(r, l) for r in self.REGION.data.VALUE)
-					for ll in self.LOCATION.data.VALUE
-					for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-								if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]],
+		regions = self.REGION.data.VALUE
+		by_destination = self._transport_routes()[1].get((l, p, y), {})
+		mode_cost_cache = self.__dict__.setdefault('_tc1_mode_cost_cache', {})
 
-					[self.Transport.get_index_label(ll, l, p, tr, y)
-					for ll in self.LOCATION.data.VALUE
-					for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-								if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]])]
-			rhs = 0
-			sense = '=='
-		else: # for HubLocation[l]==1
-			
-			if self.config['tr_interreg_costs'] == 'not_product_specific':
-				lhs = [(1, self.LocalTransportCost.get_index_label(l, p, y)),
+		# Transport cost per mode of transport into l; the same for every origin and product
+		def mode_cost(tr):
+			key = (l, tr, y)
+			if key not in mode_cost_cache:
+				mode_cost_cache[key] = -1 * sum(self.TransportCostByMode.get_value(r, tr, y)
+												* self.Geography.get_value(r, l) for r in regions)
+			return mode_cost_cache[key]
 
-					([-1 * sum(self.TransportCostByMode.get_value(r, tr, y)
-								* self.Geography.get_value(r, l) for r in self.REGION.data.VALUE)
-						for ll in self.LOCATION.data.VALUE
-						for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-									if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]],
+		lhs = [(1, self.LocalTransportCost.get_index_label(l, p, y)),
 
-						[self.Transport.get_index_label(ll, l, p, tr, y)
-						for ll in self.LOCATION.data.VALUE
-						for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-									if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]]),
+			   ([mode_cost(tr) for ll, trs in by_destination.items() for tr in trs],
 
-					([-1 * sum(sum(self.TransportCostInterReg.get_value(rr, r, tr, y)
-								* self.Geography.get_value(r, l) for r in self.REGION.data.VALUE)
-								* self.Geography.get_value(rr, ll) for rr in self.REGION.data.VALUE)
-						for ll in self.LOCATION.data.VALUE  if self.HubLocation.get_value(ll)==1
-						for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-									if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]],
+				[self.Transport.get_index_label(ll, l, p, tr, y)
+				 for ll, trs in by_destination.items() for tr in trs])]
 
-						[self.Transport.get_index_label(ll, l, p, tr, y)
-						for ll in self.LOCATION.data.VALUE if self.HubLocation.get_value(ll)==1
-						for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-									if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]])]
-				
-			elif self.config['tr_interreg_costs'] == 'product_specific':
-				lhs = [(1, self.LocalTransportCost.get_index_label(l, p, y)),
+		if self.HubLocation.get_value(l) == 1:
+			# Transport between regions occurs between the hub locations
+			geography_l = [self.Geography.get_value(r, l) for r in regions]
+			interreg_cache = {}
 
-					([-1 * sum(self.TransportCostByMode.get_value(r, tr, y)
-								* self.Geography.get_value(r, l) for r in self.REGION.data.VALUE)
-						for ll in self.LOCATION.data.VALUE
-						for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-									if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]],
+			# Sum over the regions of origin, for each mode of transport (does not depend on the origin location)
+			def interreg_cost_by_region(tr):
+				if tr not in interreg_cache:
+					if self.config['tr_interreg_costs'] == 'not_product_specific':
+						interreg_cache[tr] = [sum(self.TransportCostInterReg.get_value(rr, r, tr, y)
+												   * g for r, g in zip(regions, geography_l)) for rr in regions]
+					else: # 'product_specific'
+						interreg_cache[tr] = [sum(self.TransportCostInterReg.get_value(rr, r, tr, p, y)
+												   * g for r, g in zip(regions, geography_l)) for rr in regions]
+				return interreg_cache[tr]
+
+			geography_row = self.__dict__.setdefault('_tc1_geography_row_cache', {})
+
+			def interreg_cost(ll, tr):
+				if ll not in geography_row:
+					geography_row[ll] = [self.Geography.get_value(rr, ll) for rr in regions]
+				return -1 * sum(c * g for c, g in zip(interreg_cost_by_region(tr), geography_row[ll]))
+
+			hub_origins = [(ll, trs) for ll, trs in by_destination.items() if self.HubLocation.get_value(ll) == 1]
+			lhs.append(([interreg_cost(ll, tr) for ll, trs in hub_origins for tr in trs],
 
 						[self.Transport.get_index_label(ll, l, p, tr, y)
-						for ll in self.LOCATION.data.VALUE
-						for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-									if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]]),
-
-					([-1 * sum(sum(self.TransportCostInterReg.get_value(rr, r, tr, p, y)
-								* self.Geography.get_value(r, l) for r in self.REGION.data.VALUE)
-								* self.Geography.get_value(rr, ll) for rr in self.REGION.data.VALUE)
-						for ll in self.LOCATION.data.VALUE  if self.HubLocation.get_value(ll)==1
-						for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-									if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]],
-
-						[self.Transport.get_index_label(ll, l, p, tr, y)
-						for ll in self.LOCATION.data.VALUE if self.HubLocation.get_value(ll)==1
-						for tr in [trm for trm in self.TRANSPORTMODE.data.VALUE
-									if self.TransportRoute.get_value(ll, l, p, trm, y) == 1]])]
-			rhs = 0
-			sense = '=='
+						 for ll, trs in hub_origins for tr in trs]))
+		rhs = 0
+		sense = '=='
 		return {'lhs': lhs, 'rhs': rhs, 'sense': sense}
 
 	def TC2_DiscountedLocalTransportCosts_rule(self, l, p, y):
