@@ -98,6 +98,12 @@ check_directory(config['model_run_code'], repo_path)
 input_path = os.path.join(repo_path, 'input', config['model_run_code'])
 output_path = os.path.join(repo_path, 'output', config['model_run_code'])
 
+# The model run needs to know if TransportCostInterReg is indexed by product. In the scopes 'all' and
+# 'prepare_input' this is determined after the input csv files are built (see below), in all other
+# scopes the csv files exist already.
+if args.scope not in ['all', 'prepare_input']:
+    config['tr_interreg_costs'] = _check_backward_compatibility_transport_cost(config, input_path)
+
 # Optimisation solver
 opt = SolverFactory(config['solver']['name'])
 
