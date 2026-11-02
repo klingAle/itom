@@ -1858,13 +1858,18 @@ class itom_hub_tinyomo(object):
 					for t in TECHNOLOGY) + DiscountedTransportCost(r, y)
 		"""
 
-		lhs = [(1, self.TotalDiscountedCost.get_index_label(r, y)),
-			   (-1, [self.DiscountedOperatingCost.get_index_label(r, t, y) for t in self.TECHNOLOGY.data.VALUE]),
-			   (-1, [self.DiscountedCapitalInvestment.get_index_label(r, t, y) for t in self.TECHNOLOGY.data.VALUE]),
-			   (-1, [self.DiscountedTechnologyEmissionsPenalty.get_index_label(r, t, y) for t in
-					 self.TECHNOLOGY.data.VALUE]),
-			   (1, [self.DiscountedSalvageValue.get_index_label(r, t, y) for t in self.TECHNOLOGY.data.VALUE]),
-			   (-1, self.DiscountedTransportCost.get_index_label(r, y))]
+		# The left hand side does not depend on t, so it is built once for each region and year. The
+		# index lists are only read when the constraints are written, so they can be shared.
+		cache = self.__dict__.setdefault('_tdc1_lhs_cache', {})
+		if (r, y) not in cache:
+			cache[(r, y)] = [(1, self.TotalDiscountedCost.get_index_label(r, y)),
+							 (-1, [self.DiscountedOperatingCost.get_index_label(r, t, y) for t in self.TECHNOLOGY.data.VALUE]),
+							 (-1, [self.DiscountedCapitalInvestment.get_index_label(r, t, y) for t in self.TECHNOLOGY.data.VALUE]),
+							 (-1, [self.DiscountedTechnologyEmissionsPenalty.get_index_label(r, t, y) for t in
+									 self.TECHNOLOGY.data.VALUE]),
+							 (1, [self.DiscountedSalvageValue.get_index_label(r, t, y) for t in self.TECHNOLOGY.data.VALUE]),
+							 (-1, self.DiscountedTransportCost.get_index_label(r, y))]
+		lhs = cache[(r, y)]
 		rhs = 0
 		sense = '=='
 		return {'lhs': lhs, 'rhs': rhs, 'sense': sense}
