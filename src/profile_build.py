@@ -48,15 +48,21 @@ def peak_rss_mb():
 def load_config(scenario):
     config_path = os.path.join(REPO_PATH, 'configs')
     scenario_cfg = os.path.join(config_path, scenario + '_config.yaml')
+    config = None
     if os.path.exists(scenario_cfg):
         with open(scenario_cfg) as f:
             config = yaml.safe_load(f)
         if not config.get('model_run_code'):
             config['model_run_code'] = scenario
-        return config
-    with open(os.path.join(config_path, 'default_config.yaml')) as f:
-        config = yaml.safe_load(f)
-    config['model_run_code'] = scenario
+    if config is None:
+        with open(os.path.join(config_path, 'default_config.yaml')) as f:
+            config = yaml.safe_load(f)
+        config['model_run_code'] = scenario
+    # run.py sets this key in the scope prepare_input; the model classes need it
+    if 'tr_interreg_costs' not in config:
+        from helpers.build_input_data import _check_backward_compatibility_transport_cost
+        input_path = os.path.join(REPO_PATH, 'input', config['model_run_code'])
+        config['tr_interreg_costs'] = _check_backward_compatibility_transport_cost(config, input_path)
     return config
 
 
