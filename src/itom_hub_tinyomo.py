@@ -1077,6 +1077,24 @@ class itom_hub_tinyomo(object):
 		else:
 			return None
 
+	def _technologies_of_product(self, l, p, product_param):
+		"""
+		Technologies (in the order of TECHNOLOGY) that are hub technologies if location l is a hub location,
+		non-hub technologies otherwise, and have product p according to product_param
+		(ProductFromTechnology or ProductToTechnology). The list only depends on the hub flag of the location
+		and on the product, so it is built once for each combination.
+		"""
+
+		hub = self.HubLocation.get_value(l)
+		if hub != 1 and hub != 0:
+			raise ValueError('HubLocation of {} must be 0 or 1, found {}'.format(l, hub))
+		cache = self.__dict__.setdefault('_technologies_of_product_cache', {})
+		key = (hub, p, product_param.name)
+		if key not in cache:
+			cache[key] = [t for t in self.TECHNOLOGY.data.VALUE
+						  if self.HubTechnology.get_value(t) == hub and product_param.get_value(t, p) == 1]
+		return cache[key]
+
 	def PB3_Production_3_rule(self, l, p, y):
 		'''
 		*Constraint:* for each product, year and location, the production by each
@@ -1088,11 +1106,7 @@ class itom_hub_tinyomo(object):
 				LocalProductionByTechnology(l, t, p, y) for t in RelevantTechnology)
 		'''
 
-		if self.HubLocation.get_value(l) == 1:
-			RelevantTechnology = [t for t in self.TECHNOLOGY.data.VALUE if self.HubTechnology.get_value(t) == 1]
-		elif self.HubLocation.get_value(l) == 0:
-			RelevantTechnology = [t for t in self.TECHNOLOGY.data.VALUE if self.HubTechnology.get_value(t) == 0]
-		RelevantTechnology = [t for t in RelevantTechnology if self.ProductFromTechnology.get_value(t, p) == 1]
+		RelevantTechnology = self._technologies_of_product(l, p, self.ProductFromTechnology)
 		lhs = [(1, self.LocalProduction.get_index_label(l, p, y)),
 			   (-1, [self.LocalProductionByTechnology.get_index_label(l, t, p, y) for t in RelevantTechnology])]
 		rhs = 0
@@ -1185,11 +1199,7 @@ class itom_hub_tinyomo(object):
 			LocalUse(l, p, y) == sum(LocalUseByTechnology(l, t, p, y) for t in RelevantTechnology)
 		"""
 
-		if self.HubLocation.get_value(l) == 1:
-			RelevantTechnology = [t for t in self.TECHNOLOGY.data.VALUE if self.HubTechnology.get_value(t) == 1]
-		elif self.HubLocation.get_value(l) == 0:
-			RelevantTechnology = [t for t in self.TECHNOLOGY.data.VALUE if self.HubTechnology.get_value(t) == 0]
-		RelevantTechnology = [t for t in RelevantTechnology if self.ProductToTechnology.get_value(t, p) == 1]
+		RelevantTechnology = self._technologies_of_product(l, p, self.ProductToTechnology)
 
 		lhs = [(1, self.LocalUse.get_index_label(l, p, y)),
 			   (-1, [self.LocalUseByTechnology.get_index_label(l, t, p, y) for t in RelevantTechnology])]
