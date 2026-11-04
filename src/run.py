@@ -33,8 +33,11 @@ from itom_hub import abstract_itom_hub
 from itom_retrofit import abstract_itom_retrofit, abstract_itom_hub_retrofit
 from itom_impurities import abstract_itom_hub_retrofit_impurities
 
-import gurobipy as gp
-from gurobipy import GRB
+try:
+    import gurobipy as gp
+    from gurobipy import GRB
+except ImportError: # only needed if the model is solved with Gurobi
+    gp = GRB = None
 
 from itom_hub_tinyomo import itom_hub_tinyomo
 from itom_retrofit_tinyomo import itom_hub_retrofit_tinyomo
@@ -42,6 +45,7 @@ from itom_impurities_tinyomo import itom_hub_retrofit_impurities_tinyomo
 
 from helpers.post_process_output import _get_output_files, process_output, compress_output
 from helpers.post_process_var_tinyomo import extract_results, extract_shadow_prices
+from helpers.solve_highs import solve_and_export_highs
 
 t0 = time.time()
 ###############################################################################
@@ -52,6 +56,8 @@ parser.add_argument('-s', '--scenario', dest='scenario', type=str, help='scenari
 parser.add_argument('-c', '--scope', dest='scope', type=str, 
                     default='all', choices=['all', 'prepare_input', 'build_lp', 'solve_lp', 'build_and_solve_lp'], 
                     help='which steps of the model run to execute')
+parser.add_argument('--solver', dest='solver', type=str, default=None, choices=['gurobi', 'highs'],
+                    help='solver for the tinyomo model run, overrides solver > name of the config')
 args = parser.parse_args()
 
 ###############################################################################
@@ -84,6 +90,16 @@ except:
 
 stream.close()
 
+# If the config of the model run has no model_run_code, the scenario name is used
+if not config.get('model_run_code'):
+    config['model_run_code'] = args.scenario
+
+# The solver can be chosen when calling the script
+if args.solver is not None:
+    config['solver']['name'] = args.solver
+if config['solver']['name'] == 'gurobi' and gp is None and args.scope != 'prepare_input':
+    sys.exit('The package gurobipy is needed to solve with Gurobi. Install it or use --solver highs.')
+
 ###############################################################################
 # SETUP
 
@@ -105,7 +121,8 @@ if args.scope not in ['all', 'prepare_input']:
     config['tr_interreg_costs'] = _check_backward_compatibility_transport_cost(config, input_path)
 
 # Optimisation solver
-opt = SolverFactory(config['solver']['name'])
+if config['framework']['tinyomo'] == False:
+    opt = SolverFactory(config['solver']['name'])
 
 ###############################################################################
 # INPUT DATA
@@ -225,7 +242,7 @@ if args.scope in ['all', 'build_lp', 'solve_lp', 'build_and_solve_lp']:
 
 
     # Using tinyomo
-    elif (config['framework']['tinyomo'] == True or config['framework']['like_pyomo'] == True) and config['solver']['name']=='gurobi':
+    elif (config['framework']['tinyomo'] == True or config['framework']['like_pyomo'] == True) and config['solver']['name'] in ['gurobi', 'highs']:
 
         #### BUILD LP PROBLEM
 
@@ -259,8 +276,17 @@ if args.scope in ['all', 'build_lp', 'solve_lp', 'build_and_solve_lp']:
 
         gc.collect()
 
-        #### MODEL RUN
-        if args.scope in ['all', 'solve_lp', 'build_and_solve_lp']:
+        #### MODEL RUN WITH HIGHS
+        if args.scope in ['all', 'solve_lp', 'build_and_solve_lp'] and config['solver']['name'] == 'highs':
+
+            solve_and_export_highs(config=config, repo_path=repo_path, input_path=input_path, output_path=output_path)
+
+            t5 = time.time()
+            print('\nTotal elapsed time:  ' + str(t5-t0) + ' seconds\n')
+            print('\n##############################################\n')
+
+        #### MODEL RUN WITH GUROBI
+        if args.scope in ['all', 'solve_lp', 'build_and_solve_lp'] and config['solver']['name'] == 'gurobi':
 
             t1 = time.time()
             # Read LP model

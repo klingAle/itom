@@ -14,16 +14,18 @@ framework:
     tinyomo: True # If False, the model uses PYOMO to build the model, if True it uses tinyomo to build the .lp and .mps files.
     like_pyomo: False # If True builds the .lp and .mps files like pyomo (human readable, for debugging) and solves the problem with these files.
     sparse_enumeration: True # If True, constraint blocks that are almost empty (PB1, PB2, PB5, PB6, TF1a, IP1) only evaluate the positions that can be non-empty. The LP file is identical, building is much faster. Set False for the old behaviour (debugging).
-    keep_MPS: True # If True the model .mps file is not deleted from the output folder after the model run.
+    keep_MPS: False # If True the model .mps file is not deleted from the output folder after the model run.
     keep_LP: False # If True the model .lp file is not deleted from the output folder after the model run.
     keep_files: False # If True the intermediary files (objective.txt, constraints.txt, bounds.txt) are not deleted from the output folder after the model run.
     keep_SOL: False # If False the solution .sol file is not generated, if True it is generated and saved in the output folder after the model run.
 
 ##### SOLVER OPTIONS
 solver:
-    # glpk: solve the model locally on your laptop
+    # glpk: solve the model locally on your laptop (only with framework > tinyomo: False)
     # gurobi: send the model to the remote solver (need to be connected to the WI intranet)
-    name: gurobi # gurobi or glpk
+    # highs: open-source solver HiGHS, needs no licence (only with framework > tinyomo: True), see the options "highs" below
+    # The solver can also be chosen when calling run.py: python3 run.py -s SCENARIO --solver highs
+    name: gurobi # gurobi, highs or glpk
     shadow_prices: True # default: True (retrieve shadow prices)
     threads: 0 # default 0 (all available cores are used)
     method: -1 # default -1 (concurrent solvers - primal simplex, dual simplex and barrier); set 1 for dual simplex; setting algorithm might reduce run times of model); set 2 for barrier
@@ -41,6 +43,15 @@ solver:
     bar_homogeneous: -1 # default: -1; set to 1 to force homogeneous barrier algorithm
     seed: 0 # default: 0; set to a positive integer to set the seed for the model run (it creates a small random perturbation in the model)
     bar_dense_thresh: 0 # default: 0. Set to 100 if you have problems with dense columns.
+    # Options of HiGHS (name: highs). Shared with Gurobi: threads (0: automatic), seed, optTol (dual feasibility tolerance), feasTol (primal feasibility tolerance), presolve (0: off).
+    # All other options above are Gurobi specific and ignored by HiGHS.
+    highs:
+        solver: ipm # ipm (interior point method, recommended for the large models), simplex, choose (HiGHS decides) or pdlp
+        crossover: True # after ipm: crossover to a basic solution, needed for reliable shadow prices; can take long or fail numerically on some models (set False)
+        crossover_fallback: True # if the run with crossover does not end optimal (e.g. crossover imprecise, time limit): solve again without crossover; the solution is then used without shadow prices
+        time_limit: # seconds for each run of HiGHS, empty: no limit. Note: HiGHS does not interrupt the crossover, a run can take longer than the limit (then the fallback without crossover starts)
+        log_to_console: True
+        options: # further HiGHS options as "name: value" pairs, passed on as they are, e.g. ipm_optimality_tolerance: 1e-8
 
 #### INPUT OPTIONS
 processes:
