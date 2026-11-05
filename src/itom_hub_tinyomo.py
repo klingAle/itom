@@ -1561,7 +1561,7 @@ class itom_hub_tinyomo(object):
 			lhs = [(1, self.SalvageValue.get_index_label(r, t, y)),
 				   (-1 * self.CapitalCost.get_value(r, t, y) * (1 - (max(self.YEAR.data.VALUE) + self.TimeStep.get_value(max(self.YEAR.data.VALUE))/2 - (y - self.TimeStep.get_value(y)/2 +1) + 1) /
 																self.OperationalLife.get_value(r, t)),
-					self.SalvageValue.get_index_label(r, t, y))]
+					self.NewCapacity.get_index_label(r, t, y))]
 			rhs = 0
 			sense = '=='
 			return {'lhs': lhs, 'rhs': rhs, 'sense': sense}
